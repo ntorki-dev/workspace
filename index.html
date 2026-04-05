@@ -1,4 +1,4 @@
- <!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -221,8 +221,7 @@
   .project-card:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); }
   .project-card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; }
   .project-card-name { font-family: 'Fraunces', serif; font-size: 16px; font-weight: 400; }
-  .project-card-actions { display: flex; gap: 4px; opacity: 0; transition: opacity 0.15s; }
-  .project-card:hover .project-card-actions { opacity: 1; }
+  .project-card-actions { display: flex; gap: 4px; }
   .icon-btn { width: 28px; height: 28px; border-radius: 6px; border: none; background: transparent; color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.1s; font-size: 13px; }
   .icon-btn:hover { background: var(--surface2); color: var(--text); }
   .icon-btn.danger:hover { background: #fde8e8; color: var(--danger); }
@@ -258,8 +257,7 @@
   .task-card.dragging { opacity: 0.4; cursor: grabbing; }
   .task-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
   .task-name { font-size: 13px; font-weight: 500; line-height: 1.4; flex: 1; }
-  .task-actions { display: flex; gap: 2px; opacity: 0; transition: opacity 0.1s; }
-  .task-card:hover .task-actions { opacity: 1; }
+  .task-actions { display: flex; gap: 2px; }
   .task-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
   .priority-tag { font-size: 10px; padding: 2px 7px; border-radius: 99px; font-weight: 600; letter-spacing: 0.2px; }
   .priority-high { background: #fde8e8; color: #9e4040; }
@@ -975,8 +973,14 @@ async function deleteTask(id) {
   } catch(e) { setSync('error', 'Error'); toast('Delete failed'); }
 }
 
-// ── DRAG & DROP ──
-function onDragStart(e, taskId) { dragTaskId = taskId; setTimeout(() => e.target.classList.add('dragging'), 0); }
+// ── DRAG & DROP (mouse + touch) ──
+let touchDragEl = null;
+let touchClone = null;
+
+function onDragStart(e, taskId) {
+  dragTaskId = taskId;
+  setTimeout(() => e.target.classList.add('dragging'), 0);
+}
 function onDragEnd(e) { e.target.classList.remove('dragging'); }
 function onDragOver(e) { e.preventDefault(); e.currentTarget.classList.add('drag-over'); }
 function onDragLeave(e) { e.currentTarget.classList.remove('drag-over'); }
@@ -984,7 +988,11 @@ async function onDrop(e) {
   e.preventDefault();
   e.currentTarget.classList.remove('drag-over');
   const newStatus = e.currentTarget.dataset.status;
-  const task = tasks.find(t => t.id === dragTaskId);
+  await moveTask(dragTaskId, newStatus);
+}
+
+async function moveTask(taskId, newStatus) {
+  const task = tasks.find(t => t.id === taskId);
   if (task && task.status !== newStatus) {
     task.status = newStatus;
     setSync('syncing', 'Saving...');
@@ -996,6 +1004,52 @@ async function onDrop(e) {
     renderDashboard();
     toast('Status updated');
   }
+}
+
+// Touch drag support
+function initTouchDrag(el, taskId) {
+  el.addEventListener('touchstart', e => {
+    dragTaskId = taskId;
+    touchDragEl = el;
+    const touch = e.touches[0];
+
+    // Create floating clone
+    touchClone = el.cloneNode(true);
+    touchClone.style.cssText = `
+      position: fixed; z-index: 9999; pointer-events: none;
+      width: ${el.offsetWidth}px; opacity: 0.85;
+      left: ${touch.clientX - el.offsetWidth / 2}px;
+      top: ${touch.clientY - 30}px;
+      box-shadow: 0 8px 24px rgba(44,42,38,0.2);
+      border-radius: 8px;
+    `;
+    document.body.appendChild(touchClone);
+    el.classList.add('dragging');
+  }, { passive: true });
+
+  el.addEventListener('touchmove', e => {
+    e.preventDefault();
+    const touch = e.touches[0];
+    if (touchClone) {
+      touchClone.style.left = (touch.clientX - touchClone.offsetWidth / 2) + 'px';
+      touchClone.style.top = (touch.clientY - 30) + 'px';
+    }
+    // Highlight column under finger
+    document.querySelectorAll('.kanban-tasks').forEach(col => col.classList.remove('drag-over'));
+    const el2 = document.elementFromPoint(touch.clientX, touch.clientY);
+    const col = el2 && el2.closest('.kanban-tasks');
+    if (col) col.classList.add('drag-over');
+  }, { passive: false });
+
+  el.addEventListener('touchend', async e => {
+    const touch = e.changedTouches[0];
+    if (touchClone) { touchClone.remove(); touchClone = null; }
+    if (touchDragEl) { touchDragEl.classList.remove('dragging'); touchDragEl = null; }
+    document.querySelectorAll('.kanban-tasks').forEach(col => col.classList.remove('drag-over'));
+    const el2 = document.elementFromPoint(touch.clientX, touch.clientY);
+    const col = el2 && el2.closest('.kanban-tasks');
+    if (col) await moveTask(dragTaskId, col.dataset.status);
+  });
 }
 
 // ── RENDER DASHBOARD ──
@@ -1100,6 +1154,10 @@ function renderKanban() {
     document.getElementById('count-' + status).textContent = filtered.length;
     col.innerHTML = filtered.length ? filtered.map(t => taskCardHTML(t)).join('') : '<div style="height:40px"></div>';
   });
+  // Init touch drag on all task cards
+  document.querySelectorAll('.task-card[data-task-id]').forEach(el => {
+    initTouchDrag(el, el.dataset.taskId);
+  });
 }
 
 function taskCardHTML(t) {
@@ -1116,7 +1174,7 @@ function taskCardHTML(t) {
     }
   }
   const proj = projects.find(p => p.id === t.projectId);
-  return `<div class="task-card" draggable="true" ondragstart="onDragStart(event,'${t.id}')" ondragend="onDragEnd(event)">
+  return `<div class="task-card" data-task-id="${t.id}" draggable="true" ondragstart="onDragStart(event,'${t.id}')" ondragend="onDragEnd(event)">
     <div class="task-card-header">
       <span class="task-name">${t.name}</span>
       <div class="task-actions">
